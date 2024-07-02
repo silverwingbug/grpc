@@ -33,6 +33,7 @@
 
 #include "absl/base/attributes.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/functional/bind_front.h"
 #include "absl/hash/hash.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
@@ -61,6 +62,7 @@
 #include "src/core/ext/transport/chttp2/transport/frame_data.h"
 #include "src/core/ext/transport/chttp2/transport/frame_goaway.h"
 #include "src/core/ext/transport/chttp2/transport/frame_rst_stream.h"
+#include "src/core/ext/transport/chttp2/transport/frame_security.h"
 #include "src/core/ext/transport/chttp2/transport/hpack_encoder.h"
 #include "src/core/ext/transport/chttp2/transport/http2_settings.h"
 #include "src/core/ext/transport/chttp2/transport/internal.h"
@@ -105,6 +107,7 @@
 #include "src/core/lib/transport/metadata_info.h"
 #include "src/core/lib/transport/status_conversion.h"
 #include "src/core/lib/transport/transport.h"
+#include "src/core/lib/transport/transport_framing_endpoint_extension.h"
 #include "src/core/telemetry/call_tracer.h"
 #include "src/core/telemetry/stats.h"
 #include "src/core/telemetry/stats_data.h"
@@ -560,6 +563,33 @@ static void read_channel_args(grpc_chttp2_transport* t,
           .value_or(true);
 }
 
+void grpc_chttp2_transport::WriteSecurityFrame(grpc_core::SliceBuffer* data) {
+  combiner->Run(grpc_core::NewClosure([this, data](grpc_error_handle) mutable {
+                  WriteSecurityFrameLocked(data);
+                }),
+                absl::OkStatus());
+}
+
+void grpc_chttp2_transport::WriteSecurityFrameLocked(
+    grpc_core::SliceBuffer* data) {
+  if (!settings.peer().allow_security_frame()) {
+    close_transport_locked(
+        this,
+        grpc_error_set_int(
+            GRPC_ERROR_CREATE("Unexpected SECURITY frame scheduled for write"),
+            grpc_core::StatusIntProperty::kRpcStatus,
+            GRPC_STATUS_FAILED_PRECONDITION));
+  }
+  if (data == nullptr) {
+    return;
+  }
+  grpc_core::SliceBuffer security_frame;
+  grpc_chttp2_security_frame_create(data->c_slice_buffer(), data->Length(),
+                                    security_frame.c_slice_buffer());
+  grpc_slice_buffer_move_into(security_frame.c_slice_buffer(), &qbuf);
+  grpc_chttp2_initiate_write(this, GRPC_CHTTP2_INITIATE_WRITE_SEND_MESSAGE);
+}
+
 static void init_keepalive_pings_if_enabled_locked(
     grpc_core::RefCountedPtr<grpc_chttp2_transport> t,
     GRPC_UNUSED grpc_error_handle error) {
@@ -621,6 +651,15 @@ grpc_chttp2_transport::grpc_chttp2_transport(
     }
   }
 
+  transport_framing_endpoint_extension = QueryExtension<
+      grpc_core::TransportFramingEndpointExtension>(
+      grpc_event_engine::experimental::grpc_get_wrapped_event_engine_endpoint(
+          ep.get()));
+  if (transport_framing_endpoint_extension != nullptr) {
+    transport_framing_endpoint_extension->SetSendFrameCallback(
+        absl::bind_front(&grpc_chttp2_transport::WriteSecurityFrame, this));
+  }
+
   CHECK(strlen(GRPC_CHTTP2_CLIENT_CONNECT_STRING) ==
         GRPC_CHTTP2_CLIENT_CONNECT_STRLEN);
 
@@ -640,6 +679,7 @@ grpc_chttp2_transport::grpc_chttp2_transport(
   }
   settings.mutable_local().SetMaxHeaderListSize(DEFAULT_MAX_HEADER_LIST_SIZE);
   settings.mutable_local().SetAllowTrueBinaryMetadata(true);
+  settings.mutable_local().SetAllowSecurityFrame(true);
 
   read_channel_args(this, channel_args, is_client);
 
