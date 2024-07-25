@@ -466,6 +466,7 @@ GRPCXX_PUBLIC_HDRS = [
     "include/grpcpp/support/async_stream.h",
     "include/grpcpp/support/async_unary_call.h",
     "include/grpcpp/support/byte_buffer.h",
+    "include/grpcpp/support/global_callback_hook.h",
     "include/grpcpp/support/callback_common.h",
     "include/grpcpp/support/channel_arguments.h",
     "include/grpcpp/support/client_callback.h",
@@ -2455,6 +2456,7 @@ grpc_cc_library(
         "config",
         "exec_ctx",
         "generic_stub_internal",
+        "global_callback_hook",
         "gpr",
         "grpc",
         "grpc++_codegen_proto",
@@ -4907,6 +4909,25 @@ grpc_cc_library(
         "gpr",
         "//src/core:strerror",
         "//src/core:tchar",
+    ],
+)
+
+grpc_cc_library(
+    name = "global_callback_hook",
+    srcs = [
+        "src/cpp/client/global_callback_hook.cc",
+    ],
+    hdrs = [
+        "include/grpcpp/support/global_callback_hook.h",
+    ],
+    external_deps = [
+        "absl/log:check",
+    ],
+    language = "c++",
+    deps = [
+        "gpr",
+        "grpc_public_hdrs",
+        "grpcpp_status",
     ],
 )
 

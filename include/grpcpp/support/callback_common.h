@@ -30,6 +30,7 @@
 #include <grpcpp/impl/codegen/channel_interface.h>
 #include <grpcpp/impl/completion_queue_tag.h>
 #include <grpcpp/support/config.h>
+#include <grpcpp/support/global_callback_hook.h>
 #include <grpcpp/support/status.h>
 
 namespace grpc {
@@ -127,7 +128,8 @@ class CallbackWithStatusTag : public grpc_completion_queue_functor {
     auto status = std::move(status_);
     func_ = nullptr;     // reset to clear this out for sure
     status_ = Status();  // reset to clear this out for sure
-    CatchingCallback(std::move(func), std::move(status));
+    GetGlobalCallbackHook()->RunCallback(call_, std::move(func),
+                                         std::move(status));
     grpc_call_unref(call_);
   }
 };
@@ -214,7 +216,7 @@ class CallbackWithSuccessTag : public grpc_completion_queue_functor {
 #endif
 
     if (do_callback) {
-      CatchingCallback(func_, ok);
+      GetGlobalCallbackHook()->RunCallback(call_, std::move(func_), ok);
     }
   }
 };
